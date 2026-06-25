@@ -40,6 +40,7 @@ export default function RideOfVII() {
       healthActive: false, healthTimer: 0,  // Slow motion: 40% speed
       psychActive: false, psychTimer: 0,    // Mind expand: gaps widen 60%
       powerAnnounce: "", powerAnnounceTimer: 0, powerAnnounceColor: "",
+      powerCooldown: 0, // No new power for 30-50s after one ends
     };
   }, []);
 
@@ -95,9 +96,10 @@ export default function RideOfVII() {
       g.mtOffset += spd * 0.3;
 
       // Power-up timers
-      if (g.wealthActive) { g.wealthTimer--; if (g.wealthTimer <= 0) { g.wealthActive = false; } }
-      if (g.healthActive) { g.healthTimer--; if (g.healthTimer <= 0) { g.healthActive = false; } }
-      if (g.psychActive) { g.psychTimer--; if (g.psychTimer <= 0) { g.psychActive = false; } }
+      if (g.wealthActive) { g.wealthTimer--; if (g.wealthTimer <= 0) { g.wealthActive = false; g.powerCooldown = 1800 + Math.floor(rand(0, 600)); } }
+      if (g.healthActive) { g.healthTimer--; if (g.healthTimer <= 0) { g.healthActive = false; g.powerCooldown = 1800 + Math.floor(rand(0, 600)); } }
+      if (g.psychActive) { g.psychTimer--; if (g.psychTimer <= 0) { g.psychActive = false; g.powerCooldown = 1800 + Math.floor(rand(0, 600)); } }
+      if (g.powerCooldown > 0) g.powerCooldown--;
       if (g.powerAnnounceTimer > 0) g.powerAnnounceTimer--;
 
       // Physics
@@ -112,7 +114,7 @@ export default function RideOfVII() {
       // Spawn pillars (skip during LUXURY MODE)
       if (!g.wealthActive) {
         g.pillarTimer += spd;
-        const baseGap = g.jackpot ? 220 : Math.max(170, 210 - g.dist * 0.002);
+        const baseGap = g.jackpot ? 195 : Math.max(170, 210 - g.dist * 0.002);
         const gap = g.psychActive ? baseGap * 1.5 : baseGap;
         if (g.pillarTimer > Math.max(150, 240 - g.dist * 0.007)) {
           const minTop = 70;
@@ -126,23 +128,26 @@ export default function RideOfVII() {
 
       // Spawn sevens (common)
       g.collectTimer += spd;
-      if (g.collectTimer > 110) {
-        const lastP = g.pillars[g.pillars.length - 1];
-        const sy = lastP ? (lastP.topH + lastP.botY) / 2 + rand(-40, 40) : 120 + Math.random() * (g.groundY - 240);
+      if (g.collectTimer > 180) {
+        const sy = 70 + Math.random() * (g.groundY - 150);
         g.collectibles.push({ x: W + 40, y: sy, type: "seven", bob: rand(0, PI2), collected: false });
         g.collectTimer = 0;
       }
 
-      // Spawn rare power-ups (~28-35s) placed in easy-to-grab positions
-      g.powerTimer += spd;
-      if (g.powerTimer > 1500 + rand(0, 400)) {
-        const types = ["wealth", "health", "psych"];
-        const type = types[Math.floor(Math.random() * types.length)];
-        // Place in center of last pillar gap so it's in the safe zone
-        const lastP = g.pillars[g.pillars.length - 1];
-        const py = lastP ? (lastP.topH + lastP.botY) / 2 : H * 0.35 + rand(0, H * 0.15);
-        g.collectibles.push({ x: W + 80, y: py, type, bob: rand(0, PI2), collected: false, rare: true });
-        g.powerTimer = 0;
+      // Spawn rare power-ups - blocked during active power or cooldown
+      const anyPowerActive = g.wealthActive || g.healthActive || g.psychActive;
+      if (!anyPowerActive && g.powerCooldown <= 0) {
+        g.powerTimer += spd;
+        if (g.powerTimer > 1500 + rand(0, 400)) {
+          const types = ["wealth", "health", "psych"];
+          const type = types[Math.floor(Math.random() * types.length)];
+          const lastP = g.pillars[g.pillars.length - 1];
+          const py = lastP ? (lastP.topH + lastP.botY) / 2 : H * 0.35 + rand(0, H * 0.15);
+          g.collectibles.push({ x: W + 80, y: py, type, bob: rand(0, PI2), collected: false, rare: true });
+          g.powerTimer = 0;
+        }
+      } else {
+        g.powerTimer = 0; // Reset timer while blocked
       }
 
       // Update pillars
@@ -152,8 +157,8 @@ export default function RideOfVII() {
           p.scored = true;
           g.score += g.wealthActive ? 5 : g.jackpot ? 3 : 1;
         }
-        // Collision (not during jackpot or luxury mode)
-        if (!g.jackpot && !g.wealthActive) {
+        // Collision (only Luxury mode skips)
+        if (!g.wealthActive) {
           const px = 150, py = g.player.y;
           const hw = 15, hh = 22;
           if (px + hw > p.x && px - hw < p.x + 65 && (py - hh < p.topH || py + hh > p.botY)) {
@@ -183,7 +188,7 @@ export default function RideOfVII() {
             g.combo++; g.comboTimer = 120;
             g.score += 5 * g.combo;
             for (let i = 0; i < 8; i++) g.particles.push({ x: c.x, y: c.y, vx: rand(-3, 3), vy: rand(-3, 3), life: 1, decay: rand(0.02, 0.04), color: C.redLt, size: rand(2, 5) });
-            if (g.sevens >= 7 && !g.jackpot) {
+            if (g.sevens >= 14 && !g.jackpot) {
               g.jackpot = true; g.jackpotTimer = 480; g.sevens = 0;
               g.score += 77;
               g.flash = 20;
@@ -471,13 +476,13 @@ export default function RideOfVII() {
       // Jackpot meter
       const mX = W - 125, mY = 18, mW = 108, mH = 14;
       ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fillRect(mX, mY, mW, mH);
-      const jFill = g.jackpot ? 1 : g.sevens / 7;
+      const jFill = g.jackpot ? 1 : g.sevens / 14;
       const mGrad = ctx.createLinearGradient(mX, 0, mX + mW, 0);
       mGrad.addColorStop(0, C.red); mGrad.addColorStop(1, C.goldLt);
       ctx.fillStyle = mGrad; ctx.fillRect(mX, mY, mW * jFill, mH);
       ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(mX, mY, mW, mH);
       ctx.fillStyle = g.jackpot ? C.goldLt : C.dim; ctx.font = "10px Georgia"; ctx.textAlign = "right";
-      ctx.fillText(g.jackpot ? "JACKPOT! " + Math.ceil(g.jackpotTimer / 60) + "s" : "JACKPOT 777  " + g.sevens + "/7", W - 17, 46);
+      ctx.fillText(g.jackpot ? "JACKPOT! " + Math.ceil(g.jackpotTimer / 60) + "s" : "JACKPOT 777  " + g.sevens + "/14", W - 17, 46);
 
       // Active power-up timers
       let timerY = 62;
