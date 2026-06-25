@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const W = 800, H = 600;
-const GRAVITY = 0.55;
-const JUMP = -11;
+const GRAVITY = 0.38;
+const JUMP = -8.5;
 const PI2 = Math.PI * 2;
 const rand = (a, b) => Math.random() * (b - a) + a;
 
@@ -27,14 +27,19 @@ export default function RideOfVII() {
     gRef.current = {
       player: { y: 250, vy: 0, rot: 0 },
       pillars: [], collectibles: [], particles: [], trails: [],
-      speed: 3.2, score: 0, dist: 0,
-      pillarTimer: 0, collectTimer: 0,
+      speed: 2.4, score: 0, dist: 0,
+      pillarTimer: 180, collectTimer: 0, powerTimer: 0,
       groundY: H - 55,
       alive: true, ticks: 0,
       combo: 0, comboTimer: 0,
       sevens: 0, jackpot: false, jackpotTimer: 0,
       bgOffset: 0, mtOffset: 0,
       flash: 0,
+      // Power-ups
+      wealthActive: false, wealthTimer: 0,  // Luxury: no pillars, 3x score, recline
+      healthActive: false, healthTimer: 0,  // Slow motion: 40% speed
+      psychActive: false, psychTimer: 0,    // Mind expand: gaps widen 60%
+      powerAnnounce: "", powerAnnounceTimer: 0, powerAnnounceColor: "",
     };
   }, []);
 
@@ -82,10 +87,18 @@ export default function RideOfVII() {
       if (!g || !g.alive) return;
       g.ticks++;
 
-      const spd = g.speed + g.dist * 0.00025;
+      const baseSpd = g.speed + g.dist * 0.00015;
+      const spdMult = g.healthActive ? 0.4 : 1;
+      const spd = baseSpd * spdMult;
       g.dist += spd;
       g.bgOffset += spd;
       g.mtOffset += spd * 0.3;
+
+      // Power-up timers
+      if (g.wealthActive) { g.wealthTimer--; if (g.wealthTimer <= 0) { g.wealthActive = false; } }
+      if (g.healthActive) { g.healthTimer--; if (g.healthTimer <= 0) { g.healthActive = false; } }
+      if (g.psychActive) { g.psychTimer--; if (g.psychTimer <= 0) { g.psychActive = false; } }
+      if (g.powerAnnounceTimer > 0) g.powerAnnounceTimer--;
 
       // Physics
       g.player.vy += GRAVITY;
@@ -93,28 +106,43 @@ export default function RideOfVII() {
       g.player.rot = g.player.vy * 0.04;
 
       // Bounds
-      if (g.player.y + 40 > g.groundY) { g.player.y = g.groundY - 40; g.player.vy = 0; }
+      if (g.player.y + 28 > g.groundY) { g.player.y = g.groundY - 28; g.player.vy = 0; }
       if (g.player.y < 15) { g.player.y = 15; g.player.vy = 0; }
 
-      // Spawn pillars
-      g.pillarTimer += spd;
-      const gap = g.jackpot ? 200 : Math.max(155, 190 - g.dist * 0.003);
-      if (g.pillarTimer > Math.max(160, 260 - g.dist * 0.008)) {
-        const minTop = 70;
-        const maxTop = g.groundY - gap - 70;
-        const topH = minTop + Math.random() * (maxTop - minTop);
-        const isGold = Math.random() < 0.12;
-        g.pillars.push({ x: W + 40, topH, botY: topH + gap, scored: false, gold: isGold });
-        g.pillarTimer = 0;
+      // Spawn pillars (skip during LUXURY MODE)
+      if (!g.wealthActive) {
+        g.pillarTimer += spd;
+        const baseGap = g.jackpot ? 220 : Math.max(170, 210 - g.dist * 0.002);
+        const gap = g.psychActive ? baseGap * 1.5 : baseGap;
+        if (g.pillarTimer > Math.max(150, 240 - g.dist * 0.007)) {
+          const minTop = 70;
+          const maxTop = g.groundY - gap - 70;
+          const topH = minTop + Math.random() * Math.max(10, maxTop - minTop);
+          const isGold = Math.random() < 0.12;
+          g.pillars.push({ x: W + 40, topH, botY: topH + gap, scored: false, gold: isGold });
+          g.pillarTimer = 0;
+        }
       }
 
-      // Spawn collectibles
+      // Spawn sevens (common)
       g.collectTimer += spd;
-      if (g.collectTimer > 100) {
-        const types = ["seven", "seven", "seven", "wealth", "health", "psych"];
-        const type = types[Math.floor(Math.random() * types.length)];
-        g.collectibles.push({ x: W + 40, y: 80 + Math.random() * (g.groundY - 180), type, bob: rand(0, PI2), collected: false });
+      if (g.collectTimer > 110) {
+        const lastP = g.pillars[g.pillars.length - 1];
+        const sy = lastP ? (lastP.topH + lastP.botY) / 2 + rand(-40, 40) : 120 + Math.random() * (g.groundY - 240);
+        g.collectibles.push({ x: W + 40, y: sy, type: "seven", bob: rand(0, PI2), collected: false });
         g.collectTimer = 0;
+      }
+
+      // Spawn rare power-ups (~28-35s) placed in easy-to-grab positions
+      g.powerTimer += spd;
+      if (g.powerTimer > 1500 + rand(0, 400)) {
+        const types = ["wealth", "health", "psych"];
+        const type = types[Math.floor(Math.random() * types.length)];
+        // Place in center of last pillar gap so it's in the safe zone
+        const lastP = g.pillars[g.pillars.length - 1];
+        const py = lastP ? (lastP.topH + lastP.botY) / 2 : H * 0.35 + rand(0, H * 0.15);
+        g.collectibles.push({ x: W + 80, y: py, type, bob: rand(0, PI2), collected: false, rare: true });
+        g.powerTimer = 0;
       }
 
       // Update pillars
@@ -122,12 +150,12 @@ export default function RideOfVII() {
         p.x -= spd;
         if (!p.scored && p.x + 65 < 150) {
           p.scored = true;
-          g.score += g.jackpot ? 3 : 1;
+          g.score += g.wealthActive ? 5 : g.jackpot ? 3 : 1;
         }
-        // Collision (not during jackpot)
-        if (!g.jackpot) {
+        // Collision (not during jackpot or luxury mode)
+        if (!g.jackpot && !g.wealthActive) {
           const px = 150, py = g.player.y;
-          const hw = 22, hh = 32;
+          const hw = 15, hh = 22;
           if (px + hw > p.x && px - hw < p.x + 65 && (py - hh < p.topH || py + hh > p.botY)) {
             g.alive = false;
             for (let i = 0; i < 25; i++) g.particles.push({ x: px, y: py, vx: rand(-5, 5), vy: rand(-5, 5), life: 1, decay: rand(0.02, 0.04), color: C.marble, size: rand(2, 6) });
@@ -162,10 +190,32 @@ export default function RideOfVII() {
               for (let i = 0; i < 35; i++) g.particles.push({ x: 150 + rand(-80, 80), y: g.player.y + rand(-80, 80), vx: rand(-6, 6), vy: rand(-6, 6), life: 1, decay: rand(0.01, 0.025), color: C.goldLt, size: rand(3, 7) });
             }
           } else {
-            const bonus = { wealth: 15, health: 10, psych: 20 }[c.type];
-            g.score += bonus * (g.jackpot ? 3 : 1);
             const col = { wealth: C.wealth, health: C.health, psych: C.psych }[c.type];
-            for (let i = 0; i < 6; i++) g.particles.push({ x: c.x, y: c.y, vx: rand(-3, 3), vy: rand(-3, 3), life: 1, decay: rand(0.02, 0.04), color: col, size: rand(2, 4) });
+            // Big burst for rare power-ups
+            for (let i = 0; i < 20; i++) g.particles.push({ x: c.x, y: c.y, vx: rand(-5, 5), vy: rand(-5, 5), life: 1, decay: rand(0.015, 0.035), color: col, size: rand(3, 6) });
+            g.flash = 15;
+
+            if (c.type === "wealth") {
+              // LUXURY MODE: no pillars, 5x score, character reclines
+              g.wealthActive = true; g.wealthTimer = 720; // 12 seconds
+              g.score += 50;
+              // Clear existing pillars with gold explosion
+              g.pillars.forEach(p => {
+                for (let i = 0; i < 6; i++) g.particles.push({ x: p.x + 32, y: rand(50, g.groundY - 50), vx: rand(-2, 2), vy: rand(-2, 2), life: 1, decay: rand(0.02, 0.04), color: C.goldLt, size: rand(3, 6) });
+              });
+              g.pillars = [];
+              g.powerAnnounce = "LUXURY MODE"; g.powerAnnounceTimer = 120; g.powerAnnounceColor = C.goldLt;
+            } else if (c.type === "health") {
+              // SLOW MOTION: everything slows to 40% for 10s
+              g.healthActive = true; g.healthTimer = 600; // 10 seconds
+              g.score += 30;
+              g.powerAnnounce = "SLOW MOTION"; g.powerAnnounceTimer = 120; g.powerAnnounceColor = C.health;
+            } else if (c.type === "psych") {
+              // MIND EXPAND: pillar gaps widen 60% for 12s
+              g.psychActive = true; g.psychTimer = 720; // 12 seconds
+              g.score += 40;
+              g.powerAnnounce = "MIND EXPAND"; g.powerAnnounceTimer = 120; g.powerAnnounceColor = C.psych;
+            }
           }
           return false;
         }
@@ -271,14 +321,28 @@ export default function RideOfVII() {
           ctx.beginPath(); ctx.arc(0, 0, 16 + Math.sin(g.ticks * 0.08) * 3, 0, PI2); ctx.stroke();
         } else {
           const cm = { wealth: C.wealth, health: C.health, psych: C.psych };
-          const lm = { wealth: "W", health: "H", psych: "P" };
+          const lm = { wealth: "$", health: "+", psych: "\u03A8" };
+          const nm = { wealth: "LUXURY", health: "SLOW-MO", psych: "EXPAND" };
           const col = cm[c.type];
-          ctx.shadowColor = col; ctx.shadowBlur = 8;
-          const og = ctx.createRadialGradient(0, 0, 0, 0, 0, 12);
-          og.addColorStop(0, col); og.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = og; ctx.beginPath(); ctx.arc(0, 0, 12, 0, PI2); ctx.fill(); ctx.shadowBlur = 0;
-          ctx.fillStyle = "#fff"; ctx.font = "bold 12px Georgia"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillText(lm[c.type], 0, 0);
+          // Pulsing outer ring
+          const pulse = 0.4 + Math.sin(g.ticks * 0.1) * 0.3;
+          ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.globalAlpha = pulse;
+          ctx.beginPath(); ctx.arc(0, 0, 22 + Math.sin(g.ticks * 0.06) * 4, 0, PI2); ctx.stroke();
+          ctx.globalAlpha = 1;
+          // Big glowing orb
+          ctx.shadowColor = col; ctx.shadowBlur = 18;
+          const og = ctx.createRadialGradient(0, 0, 0, 0, 0, 18);
+          og.addColorStop(0, col); og.addColorStop(0.6, col); og.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = og; ctx.beginPath(); ctx.arc(0, 0, 18, 0, PI2); ctx.fill();
+          // Inner white core
+          ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.beginPath(); ctx.arc(0, 0, 8, 0, PI2); ctx.fill();
+          ctx.shadowBlur = 0;
+          // Symbol
+          ctx.fillStyle = "#fff"; ctx.font = "bold 14px Georgia"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(lm[c.type], 0, 1);
+          // Label below
+          ctx.fillStyle = col; ctx.font = "bold 8px Georgia";
+          ctx.fillText(nm[c.type], 0, 28);
         }
         ctx.restore();
       });
@@ -294,6 +358,7 @@ export default function RideOfVII() {
       ctx.save();
       ctx.translate(150, g.player.y);
       ctx.rotate(g.player.rot);
+      ctx.scale(0.7, 0.7);
       const isJ = g.jackpot;
 
       // Giant red 7 (mount)
@@ -363,6 +428,37 @@ export default function RideOfVII() {
         ctx.fillText("JACKPOT 777", W / 2, H / 2 - 100);
       }
 
+      // Power-up active effects
+      if (g.wealthActive) {
+        const pu = Math.sin(g.ticks * 0.08) * 0.15 + 0.2;
+        ctx.fillStyle = `rgba(212,168,67,${pu * 0.08})`; ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = `rgba(212,168,67,${pu + 0.2})`; ctx.lineWidth = 2;
+        ctx.strokeRect(4, 4, W - 8, H - 8);
+        // Gold particles rain
+        if (g.ticks % 6 === 0) g.particles.push({ x: rand(0, W), y: -5, vx: rand(-0.5, 0.5), vy: rand(1, 3), life: 1, decay: 0.015, color: C.goldLt, size: rand(1.5, 3) });
+      }
+      if (g.healthActive) {
+        const pu = Math.sin(g.ticks * 0.06) * 0.1 + 0.15;
+        ctx.fillStyle = `rgba(64,216,112,${pu * 0.06})`; ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = `rgba(64,216,112,${pu + 0.15})`; ctx.lineWidth = 2;
+        ctx.strokeRect(4, 4, W - 8, H - 8);
+      }
+      if (g.psychActive) {
+        const pu = Math.sin(g.ticks * 0.07) * 0.12 + 0.18;
+        ctx.fillStyle = `rgba(160,80,224,${pu * 0.05})`; ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = `rgba(160,80,224,${pu + 0.15})`; ctx.lineWidth = 2;
+        ctx.strokeRect(4, 4, W - 8, H - 8);
+      }
+
+      // Power announcement
+      if (g.powerAnnounceTimer > 0) {
+        const alpha = g.powerAnnounceTimer > 90 ? Math.min(1, (120 - g.powerAnnounceTimer + 120) / 30) : g.powerAnnounceTimer / 90;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = g.powerAnnounceColor; ctx.font = "bold 36px Georgia"; ctx.textAlign = "center";
+        ctx.fillText(g.powerAnnounce, W / 2, H / 2 - 60);
+        ctx.globalAlpha = 1;
+      }
+
       // === HUD ===
       ctx.fillStyle = C.text; ctx.font = "bold 28px Georgia"; ctx.textAlign = "left";
       ctx.fillText(g.score, 20, 38);
@@ -382,6 +478,21 @@ export default function RideOfVII() {
       ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(mX, mY, mW, mH);
       ctx.fillStyle = g.jackpot ? C.goldLt : C.dim; ctx.font = "10px Georgia"; ctx.textAlign = "right";
       ctx.fillText(g.jackpot ? "JACKPOT! " + Math.ceil(g.jackpotTimer / 60) + "s" : "JACKPOT 777  " + g.sevens + "/7", W - 17, 46);
+
+      // Active power-up timers
+      let timerY = 62;
+      if (g.wealthActive) {
+        ctx.fillStyle = C.wealth; ctx.font = "bold 10px Georgia"; ctx.textAlign = "right";
+        ctx.fillText("LUXURY " + Math.ceil(g.wealthTimer / 60) + "s", W - 17, timerY); timerY += 14;
+      }
+      if (g.healthActive) {
+        ctx.fillStyle = C.health; ctx.font = "bold 10px Georgia"; ctx.textAlign = "right";
+        ctx.fillText("SLOW-MO " + Math.ceil(g.healthTimer / 60) + "s", W - 17, timerY); timerY += 14;
+      }
+      if (g.psychActive) {
+        ctx.fillStyle = C.psych; ctx.font = "bold 10px Georgia"; ctx.textAlign = "right";
+        ctx.fillText("EXPAND " + Math.ceil(g.psychTimer / 60) + "s", W - 17, timerY);
+      }
 
       animRef.current = requestAnimationFrame(loop);
     };
@@ -488,9 +599,11 @@ export default function RideOfVII() {
     <div ref={containerRef} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: C.bg1, fontFamily: "Georgia, serif", userSelect: "none" }}>
       <canvas ref={canvasRef} width={W} height={H} style={{ border: "1px solid rgba(100,90,120,0.2)", borderRadius: 4, cursor: "pointer", touchAction: "none" }} />
       <div style={{ marginTop: 12, display: "flex", gap: 24, color: C.dim, fontSize: 11, flexWrap: "wrap", justifyContent: "center" }}>
-        <span><span style={{ color: C.red }}>7</span> = +5 pts \xD7 combo</span>
-        <span><span style={{ color: C.wealth }}>W</span> +15  <span style={{ color: C.health }}>H</span> +10  <span style={{ color: C.psych }}>P</span> +20</span>
-        <span><span style={{ color: C.goldLt }}>7/7</span> = JACKPOT</span>
+        <span><span style={{ color: C.red }}>7</span> = pts \xD7 combo</span>
+        <span><span style={{ color: C.wealth }}>$</span> Luxury</span>
+        <span><span style={{ color: C.health }}>+</span> Slow-Mo</span>
+        <span><span style={{ color: C.psych }}>{"\u03A8"}</span> Expand</span>
+        <span><span style={{ color: C.goldLt }}>7/7</span> JACKPOT</span>
       </div>
     </div>
   );
